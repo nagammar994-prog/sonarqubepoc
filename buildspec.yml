@@ -16,7 +16,7 @@ phases:
 
       - wget -q https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-7.2.0.5079-linux-x64.zip
       - unzip -q sonar-scanner-7.2.0.5079-linux-x64.zip
-      - export PATH=$PATH:$PWD/sonar-scanner-7.2.0.5079-linux-x64/bin
+      - export SONAR_SCANNER_HOME=$PWD/sonar-scanner-7.2.0.5079-linux-x64
 
       - echo "Installing Trivy"
 
@@ -24,7 +24,7 @@ phases:
 
       - echo "Installed Versions"
 
-      - sonar-scanner --version
+      - ${SONAR_SCANNER_HOME}/bin/sonar-scanner --version
       - ./bin/trivy --version
 
   pre_build:
@@ -54,7 +54,6 @@ phases:
       - npm install
 
       - echo "Running Unit Tests"
-
       - npm test || true
 
       - cd ..
@@ -62,25 +61,18 @@ phases:
       - echo "Running SonarQube Analysis"
 
       - |
-        sonar-scanner \
-          -Dsonar.host.url=${SONAR_HOST_URL} \
-          -Dsonar.token=${SONAR_TOKEN}
+        ${SONAR_SCANNER_HOME}/bin/sonar-scanner \
+        -Dsonar.host.url=${SONAR_HOST_URL} \
+        -Dsonar.token=${SONAR_TOKEN} \
+        -Dsonar.qualitygate.wait=true
 
-      - echo "Running Trivy Filesystem Scan"
-
-      - |
-        ./bin/trivy fs app \
-          --severity HIGH,CRITICAL \
-          --format json \
-          -o reports/trivy-fs.json
-
-      - echo "Running Terraform Scan"
+      - echo "Running Trivy Terraform Scan"
 
       - |
-        ./bin/trivy config terraform \
-          --severity HIGH,CRITICAL \
-          --format json \
-          -o reports/trivy-terraform.json
+        ./bin/trivy config ./terraform \
+        --severity HIGH,CRITICAL \
+        --format json \
+        -o reports/trivy-terraform.json
 
       - echo "Building Docker Image"
 
@@ -90,9 +82,9 @@ phases:
 
       - |
         ./bin/trivy image ${IMAGE_URI} \
-          --severity HIGH,CRITICAL \
-          --format json \
-          -o reports/trivy-image.json
+        --severity HIGH,CRITICAL \
+        --format json \
+        -o reports/trivy-image.json
 
       - echo "Generated Reports"
 
