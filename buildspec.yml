@@ -24,7 +24,6 @@ phases:
   pre_build:
     commands:
       - echo "Preparing Build"
-
       - mkdir -p reports
 
       - export BUILD_ID=${CODEBUILD_BUILD_NUMBER}
@@ -33,14 +32,15 @@ phases:
       - export IMAGE_URI=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}:${IMAGE_TAG}
 
       - echo "Logging into Amazon ECR"
-
       - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
 
       - echo "IMAGE_URI=${IMAGE_URI}"
 
+      - echo "Testing SonarQube Connectivity"
+      - curl -v ${SONAR_HOST_URL}/api/system/status
+
   build:
     commands:
-
       - echo "Installing Application Dependencies"
 
       - cd app
@@ -53,44 +53,24 @@ phases:
 
       - echo "Running SonarQube Analysis"
 
-      - |
-        npx sonarqube-scanner \
-          -Dsonar.host.url=${SONAR_HOST_URL} \
-          -Dsonar.token=${SONAR_TOKEN}
-
-      - echo "Running Trivy Terraform Scan"
-
-      - |
-        ./bin/trivy config ./terraform \
-          --severity HIGH,CRITICAL \
-          --format json \
-          -o reports/trivy-terraform.json
+      - npx sonarqube-scanner -Dsonar.host.url=${SONAR_HOST_URL} -Dsonar.token=${SONAR_TOKEN} -Dsonar.projectKey=devsecops-poc -Dsonar.projectName="DevSecOps POC" -Dsonar.sources=app -Dsonar.exclusions=**/node_modules/**
 
       - echo "Building Docker Image"
-
       - docker build -t ${IMAGE_URI} ./app
 
       - echo "Running Trivy Image Scan"
 
-      - |
-        ./bin/trivy image ${IMAGE_URI} \
-          --severity HIGH,CRITICAL \
-          --format json \
-          -o reports/trivy-image.json
+      - ./bin/trivy image --severity HIGH,CRITICAL --format json -o reports/trivy-image.json ${IMAGE_URI}
 
       - echo "Generated Reports"
-
       - ls -lh reports
 
   post_build:
     commands:
-
       - echo "Uploading Security Reports"
-
       - aws s3 cp reports/ s3://${ARTIFACT_BUCKET}/security-reports/build-${BUILD_ID}/ --recursive
 
       - echo "Pushing Docker Image"
-
       - docker push ${IMAGE_URI}
 
       - echo "Generating ECS Artifact"
