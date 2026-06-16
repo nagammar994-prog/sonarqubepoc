@@ -1,1 +1,120 @@
+version: 0.2
 
+env:
+  variables:
+    IMAGE_REPO_NAME: "devsecops-poc"
+    ARTIFACT_BUCKET: "devsecops-artifacts-dev"
+
+phases:
+
+  install:
+    runtime-versions:
+      nodejs: 18
+
+    commands:
+      - echo "Installing SonarScanner"
+
+      - wget -q https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-7.2.0.5079-linux-x64.zip
+      - unzip -q sonar-scanner-7.2.0.5079-linux-x64.zip
+      - export PATH=$PATH:$PWD/sonar-scanner-7.2.0.5079-linux-x64/bin
+
+      - echo "Installing Trivy"
+
+      - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
+
+      - echo "Installed Versions"
+
+      - sonar-scanner --version
+      - ./bin/trivy --version
+
+  pre_build:
+    commands:
+
+      - echo "Preparing Build"
+
+      - mkdir -p reports
+
+      - export BUILD_ID=${CODEBUILD_BUILD_NUMBER}
+      - export IMAGE_TAG=${CODEBUILD_BUILD_NUMBER}
+
+      - export IMAGE_URI=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}:${IMAGE_TAG}
+
+      - echo "Logging into Amazon ECR"
+
+      - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+
+      - echo "IMAGE_URI=${IMAGE_URI}"
+
+  build:
+    commands:
+
+      - echo "Installing Application Dependencies"
+
+      - cd app
+      - npm install
+
+      - echo "Running Unit Tests"
+
+      - npm test || true
+
+      - cd ..
+
+      - echo "Running SonarQube Analysis"
+
+      - |
+        sonar-scanner \
+          -Dsonar.host.url=${SONAR_HOST_URL} \
+          -Dsonar.token=${SONAR_TOKEN}
+
+      - echo "Running Trivy Filesystem Scan"
+
+      - |
+        ./bin/trivy fs app \
+          --severity HIGH,CRITICAL \
+          --format json \
+          -o reports/trivy-fs.json
+
+      - echo "Running Terraform Scan"
+
+      - |
+        ./bin/trivy config terraform \
+          --severity HIGH,CRITICAL \
+          --format json \
+          -o reports/trivy-terraform.json
+
+      - echo "Building Docker Image"
+
+      - docker build -t ${IMAGE_URI} ./app
+
+      - echo "Running Trivy Image Scan"
+
+      - |
+        ./bin/trivy image ${IMAGE_URI} \
+          --severity HIGH,CRITICAL \
+          --format json \
+          -o reports/trivy-image.json
+
+      - echo "Generated Reports"
+
+      - ls -lh reports
+
+  post_build:
+    commands:
+
+      - echo "Uploading Security Reports"
+
+      - aws s3 cp reports/ s3://${ARTIFACT_BUCKET}/security-reports/build-${BUILD_ID}/ --recursive
+
+      - echo "Pushing Docker Image"
+
+      - docker push ${IMAGE_URI}
+
+      - echo "Generating ECS Artifact"
+
+      - printf '[{"name":"devsecops-app","imageUri":"%s"}]' ${IMAGE_URI} > imagedefinitions.json
+
+      - cat imagedefinitions.json
+
+artifacts:
+  files:
+    - imagedefinitions.json
