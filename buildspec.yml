@@ -19,6 +19,9 @@ phases:
       - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh
 
       - echo "Installed Versions"
+      - node --version
+      - npm --version
+      - npx sonarqube-scanner --version || true
       - ./bin/trivy --version
 
   pre_build:
@@ -29,48 +32,54 @@ phases:
 
       - export BUILD_ID=${CODEBUILD_BUILD_NUMBER}
       - export IMAGE_TAG=${CODEBUILD_BUILD_NUMBER}
+      - export SONAR_VERSION=1.0.${CODEBUILD_BUILD_NUMBER}
 
       - export IMAGE_URI=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${IMAGE_REPO_NAME}:${IMAGE_TAG}
 
-      - echo "Logging into Amazon ECR"
-
-      - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+      - echo "Build Number : ${BUILD_ID}"
+      - echo "Sonar Version: ${SONAR_VERSION}"
+      - echo "Image URI    : ${IMAGE_URI}"
 
       - echo "Testing SonarQube Connectivity"
       - curl ${SONAR_HOST_URL}/api/system/status
 
-      - echo "IMAGE_URI=${IMAGE_URI}"
+      - echo "Logging into Amazon ECR"
+      - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
 
   build:
     commands:
 
       - echo "Installing Application Dependencies"
-
       - cd app
       - npm install
 
       - echo "Running Unit Tests"
-      - npm test || true
+      - npm test
+
+      - echo "Running npm Audit"
+      - npm audit --audit-level=high || true
 
       - cd ..
 
       - echo "Running SonarQube Analysis"
 
-      - npx sonarqube-scanner -Dsonar.host.url=${SONAR_HOST_URL} -Dsonar.token=${SONAR_TOKEN}
-
-      - echo "Verifying Coverage File"
-      - ls -l app/coverage/lcov.info || true
+      - |
+        npx sonarqube-scanner \
+          -Dsonar.host.url=${SONAR_HOST_URL} \
+          -Dsonar.token=${SONAR_TOKEN} \
+          -Dsonar.projectVersion=${SONAR_VERSION}
 
       - echo "Building Docker Image"
       - docker build -t ${IMAGE_URI} ./app
 
       - echo "Running Trivy Image Scan"
 
-      - ./bin/trivy image \
-        --severity HIGH,CRITICAL \
-        --format json \
-        -o reports/trivy-image.json \
-        ${IMAGE_URI}
+      - |
+        ./bin/trivy image \
+          --severity HIGH,CRITICAL \
+          --format json \
+          -o reports/trivy-image.json \
+          ${IMAGE_URI}
 
       - echo "Generated Reports"
       - ls -lh reports
@@ -79,14 +88,12 @@ phases:
     commands:
 
       - echo "Uploading Security Reports"
-
       - aws s3 cp reports/ s3://${ARTIFACT_BUCKET}/security-reports/build-${BUILD_ID}/ --recursive
 
       - echo "Pushing Docker Image"
-
       - docker push ${IMAGE_URI}
 
-      - echo "Generating ECS Artifact"
+      - echo "Creating ECS Deployment Artifact"
 
       - printf '[{"name":"devsecops-app","imageUri":"%s"}]' ${IMAGE_URI} > imagedefinitions.json
 
