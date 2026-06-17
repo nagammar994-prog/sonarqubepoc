@@ -6,11 +6,9 @@ env:
     ARTIFACT_BUCKET: "devsecops-artifacts-dev"
 
 phases:
-
   install:
     runtime-versions:
       nodejs: 18
-
     commands:
       - echo "Installing SonarScanner"
       - npm install -g sonarqube-scanner
@@ -21,13 +19,11 @@ phases:
       - echo "Installed Versions"
       - node --version
       - npm --version
-      - npx sonarqube-scanner --version || true
       - ./bin/trivy --version
 
   pre_build:
     commands:
       - echo "Preparing Build"
-
       - mkdir -p reports
 
       - export BUILD_ID=${CODEBUILD_BUILD_NUMBER}
@@ -48,45 +44,38 @@ phases:
 
   build:
     commands:
-
       - echo "Installing Application Dependencies"
-      - cd app
-      - npm install
+      - cd app && npm install
 
       - echo "Running Unit Tests"
-      - npm test
+      - cd app && npm test
 
       - echo "Running npm Audit"
-      - npm audit --audit-level=high || true
-
-      - cd ..
+      - cd app && npm audit --audit-level=high || true
 
       - echo "Running SonarQube Analysis"
-
-      - |
-        npx sonarqube-scanner \
-          -Dsonar.host.url=${SONAR_HOST_URL} \
-          -Dsonar.token=${SONAR_TOKEN} \
-          -Dsonar.projectVersion=${SONAR_VERSION}
+      - >
+        npx sonarqube-scanner
+        -Dsonar.host.url=${SONAR_HOST_URL}
+        -Dsonar.token=${SONAR_TOKEN}
+        -Dsonar.projectVersion=${SONAR_VERSION}
 
       - echo "Building Docker Image"
       - docker build -t ${IMAGE_URI} ./app
 
       - echo "Running Trivy Image Scan"
-
-      - |
-        ./bin/trivy image \
-          --severity HIGH,CRITICAL \
-          --format json \
-          -o reports/trivy-image.json \
-          ${IMAGE_URI}
+      - >
+        ./bin/trivy image
+        --severity HIGH,CRITICAL
+        --format json
+        -o reports/trivy-image.json
+        ${IMAGE_URI}
 
       - echo "Generated Reports"
       - ls -lh reports
 
   post_build:
     commands:
-
       - echo "Uploading Security Reports"
       - aws s3 cp reports/ s3://${ARTIFACT_BUCKET}/security-reports/build-${BUILD_ID}/ --recursive
 
@@ -94,7 +83,6 @@ phases:
       - docker push ${IMAGE_URI}
 
       - echo "Creating ECS Deployment Artifact"
-
       - printf '[{"name":"devsecops-app","imageUri":"%s"}]' ${IMAGE_URI} > imagedefinitions.json
 
       - cat imagedefinitions.json
